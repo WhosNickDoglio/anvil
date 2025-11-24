@@ -1,6 +1,5 @@
 public final class com/squareup/anvil/plugin/AndroidVariantFilter : com/squareup/anvil/plugin/VariantFilter {
 	public fun getAddOptionalAnnotations ()Z
-	public final fun getAndroidVariant ()Lcom/android/build/gradle/api/BaseVariant;
 	public fun getDisableComponentMerging ()Z
 	public fun getGenerateDaggerFactories ()Z
 	public fun getGenerateDaggerFactoriesOnly ()Z

@@ -2,12 +2,13 @@
 
 package com.squareup.anvil.plugin
 
-import com.android.build.api.dsl.AndroidSourceSet
-import com.android.build.gradle.AppExtension
-import com.android.build.gradle.BaseExtension
-import com.android.build.gradle.LibraryExtension
-import com.android.build.gradle.TestExtension
-import com.android.build.gradle.TestedExtension
+import com.android.build.api.variant.AndroidComponentsExtension
+import com.android.build.api.variant.AndroidTest
+import com.android.build.api.variant.ApplicationAndroidComponentsExtension
+import com.android.build.api.variant.Component
+import com.android.build.api.variant.LibraryAndroidComponentsExtension
+import com.android.build.api.variant.TestAndroidComponentsExtension
+import com.android.build.api.variant.UnitTest
 import org.gradle.api.Action
 import org.gradle.api.GradleException
 import org.gradle.api.Project
@@ -35,15 +36,6 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinJvmAndroidCompilation
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinJvmCompilation
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import java.util.concurrent.ConcurrentHashMap
-
-@Suppress("DEPRECATION")
-internal typealias BaseVariantDeprecated = com.android.build.gradle.api.BaseVariant
-
-@Suppress("DEPRECATION")
-private typealias TestVariantDeprecated = com.android.build.gradle.api.TestVariant
-
-@Suppress("DEPRECATION")
-private typealias UnitTestVariantDeprecated = com.android.build.gradle.api.UnitTestVariant
 
 @Suppress("unused")
 internal open class AnvilPlugin : KotlinCompilerPluginSupportPlugin {
@@ -79,12 +71,13 @@ internal open class AnvilPlugin : KotlinCompilerPluginSupportPlugin {
           // E.g. "anvilDebug", "anvilTestRelease", ...
           val configuration = getConfiguration(target, buildType = variant.name)
 
-          @Suppress("TYPEALIAS_EXPANSION_DEPRECATION")
-          when (variant) {
-            is UnitTestVariantDeprecated -> configuration.extendsFrom(testConfiguration)
-            is TestVariantDeprecated -> configuration.extendsFrom(androidTestVariant)
-            // non-test variants like "debug" extend the main config
-            else -> configuration.extendsFrom(commonConfiguration)
+          variant.nestedComponents.forEach { component: Component ->
+            when (component) {
+              is UnitTest -> configuration.extendsFrom(testConfiguration)
+              is AndroidTest -> configuration.extendsFrom(androidTestVariant)
+              // non-test variants like "debug" extend the main config
+              else -> configuration.extendsFrom(commonConfiguration)
+            }
           }
         }
       }
@@ -203,9 +196,11 @@ internal open class AnvilPlugin : KotlinCompilerPluginSupportPlugin {
           kotlin.srcDir(srcGenDir)
         }
 
+        val android = project.extensions.findByType(AndroidComponentsExtension::class.java)
+
         // For Android and AGP the above code doesn't work for some reason. This is the workaround.
-        variant.androidSourceSets?.forEach { sourceSet ->
-          sourceSet.java.srcDir(srcGenDir)
+        android?.onVariants(selector = android.selector().all()) { androidVariant ->
+          androidVariant.sources.java?.addStaticSourceDirectory(srcGenDir.get().path)
         }
       }
     }
@@ -426,20 +421,24 @@ private inline fun <reified T : Task> Project.namedLazy(
  */
 
 private fun Project.androidVariantsConfigure(
-  @Suppress("TYPEALIAS_EXPANSION_DEPRECATION")
-  action: (BaseVariantDeprecated) -> Unit,
+  action: (com.android.build.api.variant.Variant) -> Unit,
 ) {
-  val androidExtension = extensions.findByName("android")
-
-  when (androidExtension) {
-    is AppExtension -> androidExtension.applicationVariants.configureEach(action)
-    is LibraryExtension -> androidExtension.libraryVariants.configureEach(action)
-    is TestExtension -> androidExtension.applicationVariants.configureEach(action)
-  }
-
-  if (androidExtension is TestedExtension) {
-    androidExtension.unitTestVariants.configureEach(action)
-    androidExtension.testVariants.configureEach(action)
+  when (val androidExtension = extensions.findByType(AndroidComponentsExtension::class.java)) {
+    is ApplicationAndroidComponentsExtension -> androidExtension.onVariants(
+      selector = androidExtension.selector()
+        .all(),
+      callback = { action(it) },
+    )
+    is LibraryAndroidComponentsExtension -> androidExtension.onVariants(
+      androidExtension.selector()
+        .all(),
+      callback = { action(it) },
+    )
+    is TestAndroidComponentsExtension -> androidExtension.onVariants(
+      androidExtension.selector()
+        .all(),
+      callback = { action(it) },
+    )
   }
 }
 
@@ -465,9 +464,6 @@ internal class Variant private constructor(
   val name: String,
   val project: Project,
   val compileTaskProvider: TaskProvider<KotlinCompile>,
-  @Suppress("TYPEALIAS_EXPANSION_DEPRECATION")
-  val androidVariant: BaseVariantDeprecated?,
-  val androidSourceSets: List<AndroidSourceSet>?,
   val compilerPluginClasspathName: String,
   val variantFilter: VariantFilter,
 ) {
@@ -488,21 +484,11 @@ internal class Variant private constructor(
 
       val project = kotlinCompilation.target.project
       val extension = project.extensions.getByType(AnvilExtension::class.java)
-      val androidVariant = (kotlinCompilation as? KotlinJvmAndroidCompilation)?.androidVariant
-
-      val androidSourceSets = if (androidVariant != null) {
-        val sourceSetsByName = project.extensions.getByType(BaseExtension::class.java)
-          .sourceSets
-          .associateBy { it.name }
-
-        androidVariant.sourceSets.mapNotNull { sourceSetsByName[it.name] }
-      } else {
-        null
-      }
+      val isAndroidCompilation = kotlinCompilation is KotlinJvmAndroidCompilation
 
       val commonFilter = CommonFilter(kotlinCompilation.name, extension)
-      val variantFilter = if (androidVariant != null) {
-        AndroidVariantFilter(commonFilter, androidVariant)
+      val variantFilter = if (isAndroidCompilation) {
+        AndroidVariantFilter(commonFilter)
       } else {
         JvmVariantFilter(commonFilter)
       }
@@ -513,8 +499,6 @@ internal class Variant private constructor(
         project = project,
         compileTaskProvider = kotlinCompilation.compileTaskProvider as
           TaskProvider<KotlinCompile>,
-        androidVariant = androidVariant,
-        androidSourceSets = androidSourceSets,
         compilerPluginClasspathName = PLUGIN_CLASSPATH_CONFIGURATION_NAME +
           kotlinCompilation.target.targetName.replaceFirstChar(Char::uppercase) +
           kotlinCompilation.name.replaceFirstChar(Char::uppercase),
@@ -581,11 +565,29 @@ internal fun KotlinCompilation<*>.sourceSetName() =
     // are concatenated differently than in the KGP and Java source sets.
     // In KGP and Java, we get `debugAndroidTest`, but in AGP we get `androidTestDebug`.
     // The KSP and KAPT configuration names are derived from the AGP name.
-    is KotlinJvmAndroidCompilation ->
-      comp.androidVariant.sourceSets
-        // For ['debug', 'androidTest', 'debugAndroidTest'], the last name is always the one we want.
-        .last()
-        .name
+    is KotlinJvmAndroidCompilation -> {
+      // Use the compilation name directly which matches the AGP source set naming
+      // The compilation name already contains the proper source set name for Android variants
+      // For example: "debug", "release", "debugAndroidTest", "debugUnitTest", etc.
+      //
+      // For test variants like "debugAndroidTest" and "debugUnitTest", we need to extract
+      // the AGP-style name. AGP uses "androidTestDebug" and "testDebug" respectively.
+      val compilationName = comp.name
+      when {
+        // Unit test variants: "debugUnitTest" -> "testDebug"
+        compilationName.endsWith("UnitTest", ignoreCase = true) -> {
+          val buildType = compilationName.removeSuffix("UnitTest")
+          if (buildType.isEmpty() || buildType == "main") "test" else "test${buildType.capitalize()}"
+        }
+        // Android test variants: "debugAndroidTest" -> "androidTestDebug"
+        compilationName.endsWith("AndroidTest", ignoreCase = true) -> {
+          val buildType = compilationName.removeSuffix("AndroidTest")
+          if (buildType.isEmpty() || buildType == "main") "androidTest" else "androidTest${buildType.capitalize()}"
+        }
+        // Regular variants: use the compilation name as-is
+        else -> compilationName
+      }
+    }
     is KotlinJvmCompilation -> comp.name
     else -> name
   }

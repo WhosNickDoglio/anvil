@@ -144,6 +144,4 @@ public class JvmVariantFilter internal constructor(
 
 public class AndroidVariantFilter internal constructor(
   commonFilter: CommonFilter,
-  @Suppress("TYPEALIAS_EXPANSION_DEPRECATION")
-  public val androidVariant: BaseVariantDeprecated,
 ) : VariantFilter by commonFilter

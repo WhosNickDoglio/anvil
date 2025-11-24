@@ -21,10 +21,12 @@ class AnvilVersionMatrix(
 ) : KaseMatrix by KaseMatrix(agp + kotlin + gradle + dagger) {
   private companion object {
     val agpList = setOf(
-      "7.3.1",
-      "7.4.2",
       // TODO (rbusarow) enable later AGP versions once we're building with JDK 17
-      // "8.0.2", "8.1.1", "8.2.0",
+      "8.0.2",
+      "8.1.1",
+      "8.2.0",
+      "8.6.1",
+      "8.11.2",
     ).map(::AgpDependencyVersion)
     val kotlinList = setOf(kotlinVersion).map(::KotlinDependencyVersion)
     val gradleList = setOf(gradleVersion).map(::GradleDependencyVersion)
