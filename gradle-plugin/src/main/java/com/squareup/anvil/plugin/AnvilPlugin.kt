@@ -3,6 +3,7 @@
 package com.squareup.anvil.plugin
 
 import com.android.build.api.dsl.AndroidSourceSet
+import com.android.build.api.dsl.CommonExtension
 import com.android.build.gradle.AppExtension
 import com.android.build.gradle.BaseExtension
 import com.android.build.gradle.LibraryExtension
@@ -35,10 +36,14 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinTarget
 import org.jetbrains.kotlin.gradle.plugin.PLUGIN_CLASSPATH_CONFIGURATION_NAME
 import org.jetbrains.kotlin.gradle.plugin.SubpluginArtifact
 import org.jetbrains.kotlin.gradle.plugin.SubpluginOption
+import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
+import org.jetbrains.kotlin.gradle.plugin.KotlinSourceSet
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinJvmAndroidCompilation
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinJvmCompilation
+import org.jetbrains.kotlin.gradle.plugin.sources.android.androidSourceSetInfoOrNull
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.collections.find
 
 @Suppress("DEPRECATION")
 internal typealias BaseVariantDeprecated = com.android.build.gradle.api.BaseVariant
@@ -605,19 +610,49 @@ internal fun KotlinCompilation<*>.kspConfigName(): String {
 internal fun KotlinCompilation<*>.kspConfigOrNull(project: Project): Configuration? =
   project.configurations.findByName(kspConfigName())
 
+/**
+ * Returns the AGP [AndroidSourceSet] name for this compilation.
+ *
+ * KGP names compilations differently than AGP for some variants (e.g. KGP `debugAndroidTest`
+ * vs AGP `androidTestDebug`). KAPT/KSP configuration names follow the AGP source set name.
+ */
+@OptIn(ExperimentalKotlinGradlePluginApi::class)
+internal fun KotlinJvmAndroidCompilation.agpSourceSetName(): String {
+  val project = target.project
+  val androidExtension = checkNotNull(project.extensions.findByType(CommonExtension::class.java)) {
+    "Android Kotlin compilation requires the Android Gradle plugin."
+  }
+
+  // Prefer explicit KGP→AGP linkage on source sets attached to this compilation.
+  allKotlinSourceSets
+    .mapNotNull { it.androidSourceSetInfoOrNull?.androidSourceSetName }
+    .toSet()
+    .singleOrNull()
+    ?.let { return it }
+
+  // Fall back to scanning AGP source sets from the DSL extension.
+  androidExtension.sourceSets
+    .find { agpSourceSet: AndroidSourceSet -> project.findKotlinSourceSet(agpSourceSet)?.name == name }
+    ?.name
+    ?.let { return it }
+
+  if (name in androidExtension.sourceSets.names) {
+    return name
+  }
+
+  throw GradleException(
+    "Could not determine Android source set name for Kotlin compilation '$name'.",
+  )
+}
+
+@OptIn(ExperimentalKotlinGradlePluginApi::class)
+private fun Project.findKotlinSourceSet(sourceSet: AndroidSourceSet): KotlinSourceSet? = kotlinExtension.sourceSets
+    .find { kotlinSourceSet -> kotlinSourceSet.androidSourceSetInfoOrNull?.androidSourceSetName == sourceSet.name }
+
 internal fun KotlinCompilation<*>.sourceSetName() =
-  when (val comp = this@sourceSetName) {
-    // The AGP source set names for test/androidTest variants
-    // (e.g. the "androidTest" variant of the "debug" source set)
-    // are concatenated differently than in the KGP and Java source sets.
-    // In KGP and Java, we get `debugAndroidTest`, but in AGP we get `androidTestDebug`.
-    // The KSP and KAPT configuration names are derived from the AGP name.
-    is KotlinJvmAndroidCompilation ->
-      comp.androidVariant.sourceSets
-        // For ['debug', 'androidTest', 'debugAndroidTest'], the last name is always the one we want.
-        .last()
-        .name
-    is KotlinJvmCompilation -> comp.name
+  when (this) {
+    is KotlinJvmAndroidCompilation -> agpSourceSetName()
+    is KotlinJvmCompilation -> name
     else -> name
   }
 
