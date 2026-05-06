@@ -1,5 +1,6 @@
 package com.squareup.anvil.plugin
 
+import com.android.build.api.variant.AndroidComponentsExtension
 import com.google.devtools.ksp.gradle.KspExtension
 import org.gradle.api.Action
 import org.gradle.api.Project
@@ -17,6 +18,7 @@ import org.jetbrains.kotlin.gradle.dsl.kotlinExtension
 import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.androidJvm
 import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.jvm
 import org.jetbrains.kotlin.gradle.plugin.KotlinTarget
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 
 public abstract class AnvilExtension @Inject constructor(
@@ -157,6 +159,8 @@ public abstract class AnvilExtension @Inject constructor(
         .orElse(emptySet()),
     )
 
+  internal val daggerCompilerCache = ConcurrentHashMap<String, Boolean>()
+
   init {
     val useKspBackend = providers.gradleProperty("com.squareup.anvil.useKspBackend")
       .map { it.toBoolean() }
@@ -220,11 +224,18 @@ public abstract class AnvilExtension @Inject constructor(
     val willHaveDaggerFactories = generateDaggerFactories.map { anvilGenerated ->
       // If Anvil is creating factories due to `generateDaggerFactories`, then we're done.
       // Otherwise, we have to check if the Dagger compiler dependency is in KSP's classpath.
+      val androidComponents = project.extensions.findByType(
+        AndroidComponentsExtension::class.java,
+      )
       anvilGenerated || kExtension.targets
         .filter { it.isSupportedType() }
         .any { target ->
           target.compilations.any { c ->
             // If using Anvil with KSP, Dagger factory generation can come from either KSP or KAPT.
+            if (androidComponents != null) {
+              val cached = daggerCompilerCache[c.name]
+              if (cached != null) return@any cached
+            }
             c.kspConfigOrNull(project)?.hasDaggerCompilerDependency() == true ||
               c.kaptConfigOrNull(project)?.hasDaggerCompilerDependency() == true
           }
